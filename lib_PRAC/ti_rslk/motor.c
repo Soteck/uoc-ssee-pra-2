@@ -37,8 +37,6 @@
 #include "motor.h"
 #include "gpio.h"
 #include "timer_a.h"
-#include "Encoder.h"
-
 
 /*----------------------------------------------------------------------------*/
 
@@ -56,13 +54,6 @@
  * nSLEEP: if LOW disables chip
  * PH: if HIGH reverse, if LOW forward
  */
-
-/*----------------------------------------------------------------------------*/
-
-static int32_t left_rev_count = 0;
-static int32_t right_rev_count = 0;
-static float left_rev_order = 0;
-static float right_rev_order = 0;
 
 /*----------------------------------------------------------------------------*/
 
@@ -187,47 +178,6 @@ void MotorStop(motor_e motor) {
 
 /*----------------------------------------------------------------------------*/
 
-static void RightRevCallBack() {
-    right_rev_count++;
-    if(right_rev_count >= right_rev_order){
-        MotorStop(MOTOR_RIGHT);
-    }
-}
-
-static void LeftRevCallBack() {
-    left_rev_count++;
-    if(left_rev_count >= left_rev_order){
-        MotorStop(MOTOR_LEFT);
-    }
-}
-
-void MotorRoll(float left_revolutions, float right_revolutions, uint8_t motor_pwm){
-    left_rev_order = left_revolutions;
-    right_rev_order = right_revolutions;
-    motor_dir_e left_direction = MOTOR_DIR_FORWARD;
-    motor_dir_e right_direction = MOTOR_DIR_FORWARD;
-    if(left_revolutions < 0){
-        left_direction = MOTOR_DIR_BACKWARD;
-        left_rev_order = left_revolutions * -1;
-    }
-    if(right_revolutions < 0){
-        right_direction = MOTOR_DIR_BACKWARD;
-        right_rev_order = right_revolutions * -1;
-    }
-    INIT_REV_CALLLBACK(LeftRevCallBack, RightRevCallBack);
-    if(left_revolutions != 0){
-        MotorConfigure(MOTOR_LEFT, left_direction, motor_pwm);
-    }
-    if(left_revolutions != 0){
-        MotorConfigure(MOTOR_RIGHT, right_direction, motor_pwm);
-    }
-}
-
-void MotorCancelRoll(){
-    left_rev_order = 0;
-    right_rev_order = 0;
-    MotorStop(MOTOR_BOTH);
-}
 
 
 /*----------------------------------------------------------------------------*/

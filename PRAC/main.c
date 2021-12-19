@@ -51,10 +51,8 @@
 #include "msp432_launchpad_board.h"
 #include "BumpInt.h"
 #include "driverlib.h"
-#include "motor.h"
 #include "uart_driver.h"
-#include "encoder.h"
-
+#include "EncodedMotorDriver.h"
 
 /*----------------------------------------------------------------------------*/
 
@@ -160,15 +158,15 @@ static void CommandsTask(void *pvParameters) {
 static void MotorTask(void *pvParameters) {
     queue_message commandToReceive;
 
-    MotorStart(MOTOR_BOTH);
-
-    MotorConfigure(MOTOR_RIGHT, MOTOR_DIR_FORWARD, 0);
-    MotorConfigure(MOTOR_LEFT, MOTOR_DIR_FORWARD, 0);
+//    MotorStart(MOTOR_BOTH);
+//
+//    MotorConfigure(MOTOR_RIGHT, MOTOR_DIR_FORWARD, 0);
+//    MotorConfigure(MOTOR_LEFT, MOTOR_DIR_FORWARD, 0);
 
     for (;;) {
 
         if (xQueueReceive(xQueueActions, (void *)&commandToReceive, xMaxExpectedBlockTime) == pdTRUE) {
-            MotorConfigure(commandToReceive.motor, commandToReceive.dir, commandToReceive.pwm);
+//            MotorConfigure(commandToReceive.motor, commandToReceive.dir, commandToReceive.pwm);
 
         }
     }
@@ -203,9 +201,9 @@ static void SpeedMeasure(void *pvParameters) {
         elapsed_ms = pdTICKS_TO_MS(elapsed_ticks);
 
         // Calculate wheel speed for left and right motors
-        EncoderGetSpeed(ENCODER_LEFT, elapsed_ms, &left_distance_mm, &left_speed_mm_s);
+        EncodedMotorGetSpeed(ENCODER_LEFT, elapsed_ms, &left_distance_mm, &left_speed_mm_s);
         left_median_speed = left_distance_mm / TIME_WINDOW_SECONDS;
-        EncoderGetSpeed(ENCODER_RIGHT, elapsed_ms, &right_distance_mm, &right_speed_mm_s);
+        EncodedMotorGetSpeed(ENCODER_RIGHT, elapsed_ms, &right_distance_mm, &right_speed_mm_s);
         right_median_speed = right_distance_mm / TIME_WINDOW_SECONDS;
 
         formatAndPrintMessage(
@@ -267,15 +265,14 @@ int main(int argc, char** argv)
 
     /* Initialize the board and peripherals */
     board_init();
-    MotorInit();
-    EncoderInit();
+    EncodedMotorInit();
     uart_init(NULL);
     BumpInt_Init(NULL);
 
 
     if ( true ) {  //can be used to check the existence of FreeRTOS sync tools
-        MotorStart(MOTOR_BOTH);
-        MotorRoll(10, -10, 50);
+        EncodedMotorStart(MOTOR_BOTH);
+        EncodedMotorRoll(10, -10, 50);
         /* Create HeartBeat task */
         retVal = xTaskCreate(HeartBeatTask, "HeartBeatTask", HEARTBEAT_STACK_SIZE, NULL, HEARTBEAT_TASK_PRIORITY, NULL );
         if(retVal < 0) {
