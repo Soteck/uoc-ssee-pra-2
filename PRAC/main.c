@@ -53,6 +53,8 @@
 #include "driverlib.h"
 #include "uart_driver.h"
 #include "EncodedMotorDriver.h"
+#include "motor.h"
+#include "Encoder.h"
 
 /*----------------------------------------------------------------------------*/
 
@@ -66,9 +68,9 @@
 #define HEART_BEAT_ON_MS            ( 10 )
 #define HEART_BEAT_OFF_MS           ( 990 )
 
-#define PWM_VALUE                   ( 35 )
+#define PWM_VALUE                   ( 25 )
 
-#define DEBOUNCING_MS               ( 20 )
+#define DEBOUNCING_MS               ( 200 )
 
 
 
@@ -111,10 +113,7 @@ typedef struct{
 // Tasks
 static void CommandsTask(void *pvParameters);
 static void MotorTask(void *pvParameters);
-static void SpeedMeasureTask(void *pvParameters);
 static void SensingTask(void *pvParameters);
-static void FormatPrintSensorsData(float left_distance_mm, float left_speed_mm_s, float right_distance_mm, float right_speed_mm_s, float left_median_speed, float right_median_speed, uint8_t pwm);
-static void FormatPrintMotorsData( BaseType_t r_motor_isrunning, BaseType_t l_motor_isrunning, uint8_t motors_pwm_status);
 // callbacks & functions
 
 
@@ -122,6 +121,7 @@ static void FormatPrintMotorsData( BaseType_t r_motor_isrunning, BaseType_t l_mo
 SemaphoreHandle_t xBumperReceived;
 SemaphoreHandle_t xActionDone;
 QueueHandle_t xQueueActions;
+QueueHandle_t xQueueReporting;
 //Constants
 const TickType_t bumperDEBOUNCE_DELAY = pdMS_TO_TICKS(DEBOUNCING_MS);
 const TickType_t xMaxExpectedBlockTime = pdMS_TO_TICKS(500);
@@ -287,115 +287,6 @@ static void SensingTask(void *pvParameters) {
     }
 }
 
-static void SpeedMeasureTask(void *pvParameters) {
-
-    TickType_t previous_ticks, current_ticks, elapsed_ticks;
-    uint32_t elapsed_ms;
-    float left_distance_mm, left_speed_mm_s, right_distance_mm, right_speed_mm_s, left_median_speed, right_median_speed;
-    BaseType_t r_motor_isrunning, l_motor_isrunning;
-    uint8_t motors_pwm_status;
-
-    // Wait for motors to start
-    vTaskDelay(pdMS_TO_TICKS(1000));
-
-    // Get previous ticks
-    previous_ticks = xTaskGetTickCount();
-
-    uart_print("Initiating speed measurements... \n\r");
-    if(UART_FORMAT == CSV){
-        uart_print("R Distance,R Speed,L Distance,L Speed,Duty cycle \n\r");
-    }
-
-    for (;;) {
-        // Get current ticks
-
-        current_ticks = xTaskGetTickCount();
-
-        // Calculate elapsed milliseconds and update variables
-        elapsed_ticks = current_ticks - previous_ticks;
-        previous_ticks = current_ticks;
-        elapsed_ms = pdTICKS_TO_MS(elapsed_ticks);
-
-        // Calculate wheel speed for left and right motors
-        EncodedMotorGetSpeed(ENCODER_LEFT, elapsed_ms, &left_distance_mm, &left_speed_mm_s);
-        left_median_speed = left_distance_mm / TIME_WINDOW_SECONDS;
-        EncodedMotorGetSpeed(ENCODER_RIGHT, elapsed_ms, &right_distance_mm, &right_speed_mm_s);
-        right_median_speed = right_distance_mm / TIME_WINDOW_SECONDS;
-
-        FormatPrintSensorsData(
-                left_distance_mm,
-                left_speed_mm_s,
-                right_distance_mm,
-                right_speed_mm_s,
-                left_median_speed,
-                right_median_speed,
-                0);
-
-        GetMotorStatus(&l_motor_isrunning, &r_motor_isrunning, &motors_pwm_status);
-
-        FormatPrintMotorsData(l_motor_isrunning, r_motor_isrunning, motors_pwm_status);
-
-        vTaskDelay(pdMS_TO_TICKS(TIME_WINDOW_MILIS));
-    }
-
-}
-
-static void FormatPrintMotorsData(
-        BaseType_t r_motor_isrunning,
-        BaseType_t l_motor_isrunning,
-        uint8_t motors_pwm_status
-    ){
-    char message[TX_UART_MESSAGE_LENGTH];
-
-    switch(UART_FORMAT){
-    case TEXT:
-        sprintf(message, "R status: %d, L status: %d, Duty cycle: %d. \n\r", r_motor_isrunning, l_motor_isrunning, motors_pwm_status);
-        break;
-    case JSPUSH:
-        sprintf(message, "data.push({r: %d, l: %d, d: %d}); \n\r", r_motor_isrunning, l_motor_isrunning, motors_pwm_status);
-        break;
-    case JSON:
-        sprintf(message, "{r: %d, l: %d, d: %d} \n\r", r_motor_isrunning, l_motor_isrunning, motors_pwm_status);
-        break;
-    case CSV:
-        sprintf(message, "%d,%d,%d \n\r", r_motor_isrunning, l_motor_isrunning, motors_pwm_status);
-        break;
-    }
-
-    // send via UART
-    uart_print(message);
-}
-
-static void FormatPrintSensorsData(
-        float left_distance_mm,
-        float left_speed_mm_s,
-        float right_distance_mm,
-        float right_speed_mm_s,
-        float left_median_speed,
-        float right_median_speed,
-        uint8_t pwm
-    ){
-    char message[TX_UART_MESSAGE_LENGTH];
-
-    switch(UART_FORMAT){
-    case TEXT:
-        sprintf(message, "R Distance: %.1f, R speed: %.1f, L Distance: %.1f, L Speed: %.1f, Duty cycle: %d. \n\r", right_distance_mm, right_median_speed, left_distance_mm, left_median_speed, pwm);
-        break;
-    case JSPUSH:
-        sprintf(message, "data.push({r: {d: %.1f, s: %.1f}, l: {d: %.1f, s: %.1f}, d: %d}); \n\r", right_distance_mm, right_median_speed, left_distance_mm, left_median_speed, pwm);
-        break;
-    case JSON:
-        sprintf(message, "{r: {d: %.1f, s: %.1f}, l: {d: %.1f, s: %.1f}, d: %d} \n\r", right_distance_mm, right_median_speed, left_distance_mm, left_median_speed, pwm);
-        break;
-    case CSV:
-        sprintf(message, "%.1f,%.1f,%.1f,%.1f,%d \n\r", right_distance_mm, right_median_speed, left_distance_mm, left_median_speed, pwm);
-        break;
-    }
-
-    // send via UART
-    uart_print(message);
-}
-
 
 /*----------------------------------------------------------------------------*/
 void BumperCallBack(uint8_t bumpers){
@@ -432,13 +323,14 @@ int main(int argc, char** argv)
 
     /* Initialize the board and peripherals */
     board_init();
-    EncodedMotorInit( MotorTaskEndCallback, MotorTaskInterruptedCallback );
+    // No auditamos el estado de los motores
+    EncodedMotorInit( MotorTaskEndCallback, MotorTaskInterruptedCallback, NULL );
     uart_init(NULL);
     BumpInt_Init(BumperCallBack);
 
 
     if ( true ) {  //can be used to check the existence of FreeRTOS sync tools
-        EncodedMotorStart(MOTOR_BOTH);
+        EncodedMotorStart();
 
         /* Create CommandsTask task */
         retVal = xTaskCreate(CommandsTask, "CommandsTask", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
@@ -461,12 +353,6 @@ int main(int argc, char** argv)
             while(1);
         }
 
-        /* Create SpeedMeasure task */
-        retVal = xTaskCreate(SpeedMeasureTask, "SpeedMeasure", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
-        if(retVal < 0) {
-            led_on(MSP432_LAUNCHPAD_LED_RED);
-            while(1);
-        }
 
         /* Start the task scheduler */
         vTaskStartScheduler();

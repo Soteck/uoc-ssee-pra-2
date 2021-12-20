@@ -19,6 +19,7 @@
 /* Free-RTOS includes */
 #include "FreeRTOS.h"
 #include "semphr.h"
+#include "queue.h"
 #include "portmacro.h"
 
 
@@ -26,16 +27,11 @@
 #include "msp432_launchpad_board.h"
 #include "Encoder.h"
 #include "motor.h"
+#include "EncodedMotorDriver.h"
 /*----------------------------------------------------------------------------*/
 
 
 /*----------------------------------------------------------------------------*/
-
-static int32_t left_rev_count = 0;
-static int32_t right_rev_count = 0;
-static uint8_t left_rev_order = 0;
-static uint8_t right_rev_order = 0;
-static BaseType_t checkDecimal = pdFALSE;
 
 static void (*end_roll_callback)(void);
 static void (*roll_interrupt_callback)(void);
@@ -46,7 +42,7 @@ static BaseType_t r_motor_running = pdFALSE;
 static BaseType_t l_motor_running = pdFALSE;
 static uint8_t motors_pwm = 0;
 
-SemaphoreHandle_t xMutexOrders;
+QueueHandle_t queueReporting;
 
 void GetMotorStatus(BaseType_t * point_l_motor, BaseType_t * point_r_motor, uint8_t * point_pwm){
     *point_l_motor = l_motor_running;
@@ -79,42 +75,33 @@ static void StartRight(){
     r_motor_running = pdTRUE;
 }
 
+static void SendQueue(int32_t r_ticks, int32_t l_ticks){
+    reporting_message action;
+    if(queueReporting){
+        if(r_ticks){
+            action.r_ticks = r_ticks;
+        }
+        if(l_ticks){
+            action.l_ticks = l_ticks;
+        }
+        xQueueSendFromISR(queueReporting, (void *)&action, NULL);
+    }
+}
+
 // No necesitamos implementar secciones criticas porque al estar dentro de un ISR no puede interumpirse
-static void LeftRevCallBack() {
-    left_rev_count++;
-    if(!checkDecimal && left_rev_count >= left_rev_order){
-        StopLeft();
-    }
+static void LeftCallBack(int32_t ticks) {
+    StopLeft();
 }
-static void RightRevCallBack() {
-    right_rev_count++;
-    if(!checkDecimal &&  right_rev_count >= right_rev_order){
-        StopRight();
-    }
-}
-static void LeftDecimalRevCallBack() {
-    if(left_rev_count >= left_rev_order){
-        StopLeft();
-    }
-}
-static void RightDecimalRevCallBack() {
-    if(right_rev_count >= right_rev_order){
-        StopRight();
-    }
+static void RightCallBack(int32_t ticks) {
+    StopRight();
+    SendQueue(ticks, NULL);
 }
 
 
 void EncodeedMotorCancelRoll(){
-    if( xSemaphoreTake( xMutexOrders, ( TickType_t ) 10 ) == pdTRUE ){
-        left_rev_order = 0;
-        right_rev_order = 0;
-        xSemaphoreGive( xMutexOrders );
-    }
+
     StopLeft();
     StopRight();
-
-    left_rev_count = 0;
-    right_rev_count = 0;
 
     if(roll_interrupt_callback_set == pdTRUE){
         roll_interrupt_callback();
@@ -136,25 +123,9 @@ void EncodedMotorRoll(float left_revolutions, float right_revolutions, uint8_t m
         right_revolutions = right_revolutions * -1;
     }
 
-    if( xSemaphoreTake( xMutexOrders, ( TickType_t ) 10 ) == pdTRUE ){
-        left_rev_order = (uint8_t) left_revolutions;
-        right_rev_order = (uint8_t) right_revolutions;
-        xSemaphoreGive( xMutexOrders );
-    }
 
+    SETUP_THRESHOLD_CALLBACK(left_revolutions, right_revolutions, LeftCallBack, RightCallBack);
 
-    float l_decimal = left_revolutions - left_rev_order;
-    float r_decimal = right_revolutions - right_rev_order;
-
-
-    INIT_REV_CALLLBACK(LeftRevCallBack, RightRevCallBack);
-    if(l_decimal > 0 || r_decimal > 0){
-        checkDecimal = pdTRUE;
-        INIT_DECIMAL_REV_CALLBACK(l_decimal, r_decimal, LeftDecimalRevCallBack, RightDecimalRevCallBack);
-    }else{
-        REMOVE_DECIMAL_REV_CALLBACK();
-        checkDecimal = pdFALSE;
-    }
 
     if(left_revolutions != 0){
         MotorConfigure(MOTOR_LEFT, left_direction, motor_pwm);
@@ -175,10 +146,15 @@ void EncodedMotorRoll(float left_revolutions, float right_revolutions, uint8_t m
 
 /*----------------------------------------------------------------------------*/
 
-void EncodedMotorInit( void (*end_callback_fn)(void),  void (*interrupted_callback_fn)(void)){
+// Esta hecho para poderle pasar una cola en la cual va a poner mensajes de estados de motores, por si se quiere auditar
+void EncodedMotorInit(
+        void (*end_callback_fn)(void),
+        void (*interrupted_callback_fn)(void),
+       QueueHandle_t * queueReportingR
+
+){
     MotorInit();
     EncoderInit();
-    xMutexOrders = xSemaphoreCreateMutex();
     if(end_callback_fn){
         end_roll_callback_set = pdTRUE;
         end_roll_callback = end_callback_fn;
@@ -187,11 +163,10 @@ void EncodedMotorInit( void (*end_callback_fn)(void),  void (*interrupted_callba
         roll_interrupt_callback_set = pdTRUE;
         roll_interrupt_callback = interrupted_callback_fn;
     }
+    if(queueReporting){
+        queueReporting = queueReportingR;
+    }
 }
-void EncodedMotorStart(motor_e motor){
-    MotorStart(motor);
-}
-
-void EncodedMotorGetSpeed(encoder_e encoder, uint32_t elapsed_ms, float * distance_mm, float * speed_mm_ms){
-    EncoderGetSpeed(encoder, elapsed_ms, distance_mm, speed_mm_ms);
+void EncodedMotorStart(){
+    MotorStart(MOTOR_BOTH);
 }

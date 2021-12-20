@@ -36,7 +36,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include "EncoderConstants.h"
 
 /*----------------------------------------------------------------------------*/
 
@@ -44,6 +43,25 @@
 #define COUNTS_PER_REVOLUTION_INV       ( -360.0f ) // Setting that as constant will prevent a lot of cpu cycles
 
 /*----------------------------------------------------------------------------*/
+#define WHEEL_DIAMETER_MM           ( 60.0f )
+#define DISTANCIA_ENTRE_EJES_MM     ( 150 )
+#define MATH_PI                     ( 3.14159f )
+
+typedef enum {
+    ENCODER_NONE = 0,
+    ENCODER_LEFT = 1,
+    ENCODER_RIGHT = 2
+} encoder_e;
+
+
+typedef uint32_t encoder_counts_t;
+
+
+typedef enum {
+    ENCODER_DIR_NONE = 0,
+    ENCODER_DIR_FORWARD = 1,
+    ENCODER_DIR_BACKWARD = 2,
+} encoder_dir_e;
 
 
 
@@ -54,10 +72,8 @@ typedef void (*encoder_callback_fn)(void);
 /*----------------------------------------------------------------------------*/
 
 void EncoderInit(void);
-void EncoderGetSpeed(encoder_e encoder, uint32_t elapsed_ms, float * distance_mm, float * speed_mm_ms);
 void AddCallBackForRotationCount(uint16_t rotationsNumber, void (*callback)(uint8_t));
-void INIT_REV_CALLLBACK( void (*left_callback_fn)(void), void (*right_callback_fn)(void));
-void INIT_DECIMAL_REV_CALLBACK( float l_rpm_fraction, float r_rpm_fraction, void (*left_callback_fn)(void), void (*right_callback_fn)(void));
-void REMOVE_DECIMAL_REV_CALLBACK();
 
+void SETUP_THRESHOLD_CALLBACK( float l_rpm, float r_rpm, void (*left_callback_fn)(int32_t), void (*right_callback_fn)(int32_t) );
+void REMOVE_CALLBACKS();
 /*----------------------------------------------------------------------------*/
