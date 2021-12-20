@@ -1,4 +1,8 @@
 
+#define WHEEL_DIAMETER_MM           ( 60.0f )
+#define DISTANCIA_ENTRE_EJES_MM     ( 150 )
+#define MATH_PI                     ( 3.14159f )
+
 typedef enum {
     ENCODER_NONE = 0,
     ENCODER_LEFT = 1,

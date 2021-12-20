@@ -79,12 +79,18 @@ static int32_t right_motor_old = 0;
 static float left_rev_count = 0;
 static float right_rev_count = 0;
 
-static uint16_t counts_callback_trigger = 0;
-static void (*counts_callback_fn);
-
 static BaseType_t callbacks_attached = pdFALSE;
 static void (*right_rotation_callback_fn)(void);
 static void (*left_rotation_callback_fn)(void);
+
+
+static BaseType_t decimal_callbacks_attached = pdFALSE;
+static float r_decimal_callback_counts_up = 0;
+static float r_decimal_callback_counts_down = 0;
+static float l_decimal_callback_counts_up = 0;
+static float l_decimal_callback_counts_down = 0;
+static void (*right_decimal_rotation_callback_fn)(void);
+static void (*left_decimal_rotation_callback_fn)(void);
 
 /*----------------------------------------------------------------------------*/
 
@@ -114,7 +120,7 @@ void EncoderInit(void) {
 /*----------------------------------------------------------------------------*/
 
 void EncoderGetSpeed(encoder_e encoder, uint32_t elapsed_ms, float * distance_mm, float * speed_mm_s) {
-    const float wheel_length_mm = 3.14159f * WHEEL_DIAMETER_MM;
+    const float wheel_length_mm = MATH_PI * WHEEL_DIAMETER_MM;
     const float counts_per_rev  = COUNTS_PER_REVOLUTION;
 
     int32_t elapsed_counts;
@@ -160,18 +166,31 @@ static int32_t EncoderElapsedCounts(encoder_e encoder) {
 
 /*----------------------------------------------------------------------------*/
 
-void AddCallBackForRotationCount(uint16_t rotationsNumber, void (*callback)(uint8_t)){
-    counts_callback_trigger = rotationsNumber * COUNTS_PER_REVOLUTION;
-    counts_callback_fn = callback;
-}
-
+// Este callback se llamará cada vuelta de rueda
 void INIT_REV_CALLLBACK(
         void (*left_callback_fn)(void),
         void (*right_callback_fn)(void)
-){
+        ){
     callbacks_attached = pdTRUE;
     left_rotation_callback_fn = left_callback_fn;
     right_rotation_callback_fn = right_callback_fn;
+}
+
+// Este callback se llamará cada vez que la rueda llegue a {rpm_fraction}.
+// Por ejemplo, si se setea 0.75, se llamará cuando la rueda haya dado 0.75 vueltas, 1.75, 2.75... etc
+void INIT_DECIMAL_REV_CALLBACK(
+        float l_rpm_fraction,
+        float r_rpm_fraction,
+        void (*left_callback_fn)(void),
+        void (*right_callback_fn)(void)
+        ){
+    l_decimal_callback_counts_up = COUNTS_PER_REVOLUTION * l_rpm_fraction;
+    l_decimal_callback_counts_down = COUNTS_PER_REVOLUTION_INV * l_rpm_fraction;
+    r_decimal_callback_counts_up = COUNTS_PER_REVOLUTION * r_rpm_fraction;
+    r_decimal_callback_counts_down = COUNTS_PER_REVOLUTION_INV * r_rpm_fraction;
+    decimal_callbacks_attached = pdTRUE;
+    left_decimal_rotation_callback_fn = left_callback_fn;
+    right_decimal_rotation_callback_fn = right_callback_fn;
 }
 
 
@@ -213,19 +232,35 @@ void PORT5_IRQHandler(void)
         }
     }
 
-    // Si las revoluciones llegan a una vuelta hacia adelante o hacia atrás y el callback esta seteado, lo llamamos
-    if(right_rev_count != 0 &&
-            (right_rev_count > COUNTS_PER_REVOLUTION || right_rev_count < COUNTS_PER_REVOLUTION_INV)){
-        right_rev_count = 0;
-        if(callbacks_attached == pdTRUE){
-            right_rotation_callback_fn();
+    if(right_rev_count != 0){
+        // Si las revoluciones llegan a una vuelta hacia adelante o hacia atrás y el callback esta seteado, lo llamamos
+        if(right_rev_count > COUNTS_PER_REVOLUTION || right_rev_count < COUNTS_PER_REVOLUTION_INV){
+            right_rev_count = 0;
+            if(callbacks_attached == pdTRUE){
+                right_rotation_callback_fn();
+            }
+        }
+        // Si hay callback decimal y las revoluciones llegan al punto decimal seteado hacia adelante o hacia atráas, lo llamamos
+        if(decimal_callbacks_attached == pdTRUE){
+            if(right_rev_count > r_decimal_callback_counts_up || right_rev_count < r_decimal_callback_counts_down){
+                right_decimal_rotation_callback_fn();
+            }
         }
     }
-    if(left_rev_count != 0 &&
-            (left_rev_count > COUNTS_PER_REVOLUTION || left_rev_count < COUNTS_PER_REVOLUTION_INV)){
-        left_rev_count = 0;
-        if(callbacks_attached == pdTRUE){
-            left_rotation_callback_fn();
+
+    if(left_rev_count != 0){
+        // Si las revoluciones llegan a una vuelta hacia adelante o hacia atrás y el callback esta seteado, lo llamamos
+        if (left_rev_count > COUNTS_PER_REVOLUTION || left_rev_count < COUNTS_PER_REVOLUTION_INV){
+            left_rev_count = 0;
+            if(callbacks_attached == pdTRUE){
+                left_rotation_callback_fn();
+            }
+        }
+        // Si hay callback decimal y las revoluciones llegan al punto decimal seteado hacia adelante o hacia atráas, lo llamamos
+        if(decimal_callbacks_attached == pdTRUE){
+            if(left_rev_count > l_decimal_callback_counts_up || left_rev_count < l_decimal_callback_counts_down){
+                left_decimal_rotation_callback_fn();
+            }
         }
     }
 

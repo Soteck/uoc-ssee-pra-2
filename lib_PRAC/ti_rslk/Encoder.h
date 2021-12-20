@@ -42,7 +42,6 @@
 
 #define COUNTS_PER_REVOLUTION           ( 360.0f )
 #define COUNTS_PER_REVOLUTION_INV       ( -360.0f ) // Setting that as constant will prevent a lot of cpu cycles
-#define WHEEL_DIAMETER_MM               ( 60.0f )
 
 /*----------------------------------------------------------------------------*/
 
@@ -58,5 +57,6 @@ void EncoderInit(void);
 void EncoderGetSpeed(encoder_e encoder, uint32_t elapsed_ms, float * distance_mm, float * speed_mm_ms);
 void AddCallBackForRotationCount(uint16_t rotationsNumber, void (*callback)(uint8_t));
 void INIT_REV_CALLLBACK( void (*left_callback_fn)(void), void (*right_callback_fn)(void));
+void INIT_DECIMAL_REV_CALLBACK( float l_rpm_fraction, float r_rpm_fraction, void (*left_callback_fn)(void), void (*right_callback_fn)(void));
 
 /*----------------------------------------------------------------------------*/

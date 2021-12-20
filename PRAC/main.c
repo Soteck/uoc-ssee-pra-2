@@ -57,6 +57,7 @@
 /*----------------------------------------------------------------------------*/
 
 #define TASK_PRIORITY               ( tskIDLE_PRIORITY + 2 )
+#define MOTOR_TASK_PRIORITY         ( tskIDLE_PRIORITY + 5 )
 #define HEARTBEAT_TASK_PRIORITY     ( tskIDLE_PRIORITY + 1 )
 
 #define TASK_STACK_SIZE             ( 1024 )
@@ -64,17 +65,19 @@
 
 #define HEART_BEAT_ON_MS            ( 10 )
 #define HEART_BEAT_OFF_MS           ( 990 )
-#define PWM_INCREMENTAL_RATE        ( 5 )
-#define PWM_START_VALUE             ( 0 )
-#define PWM_MAX_VALUE               ( 100 )
+
+#define PWM_VALUE                   ( 35 )
+
 #define DEBOUNCING_MS               ( 20 )
+
+
 
 #define QUEUE_SIZE                  ( 50 )
 
 #define TX_UART_MESSAGE_LENGTH      ( 128 )
 
 
-#define TIME_WINDOW_MILIS            ( 5000 )
+#define TIME_WINDOW_MILIS            ( 1000 )
 
 #define pdTICKS_TO_MS( xTimeInMs ) ( ( TickType_t ) ( ( ( TickType_t ) ( xTimeInMs ) * ( TickType_t ) 1000 ) / ( TickType_t ) configTICK_RATE_HZ ) )
 
@@ -88,28 +91,36 @@ typedef enum {
 
 
 typedef struct{
-    motor_e motor;
-    motor_dir_e dir;
+    float r_revs;
+    float l_revs;
     uint8_t pwm;
-}queue_message;
+}action_message;
+
 
 // Tasks
 static void HeartBeatTask(void *pvParameters);
 static void CommandsTask(void *pvParameters);
 static void MotorTask(void *pvParameters);
 static void SpeedMeasure(void *pvParameters);
-static void formatAndPrintMessage(float left_distance_mm, float left_speed_mm_s, float right_distance_mm, float right_speed_mm_s, float left_median_speed, float right_median_speed, uint8_t pwm);
-
+static void FormatPrintSensorsData(float left_distance_mm, float left_speed_mm_s, float right_distance_mm, float right_speed_mm_s, float left_median_speed, float right_median_speed, uint8_t pwm);
+static void FormatPrintMotorsData( BaseType_t r_motor_isrunning, BaseType_t l_motor_isrunning, uint8_t motors_pwm_status);
 // callbacks & functions
 
 
 //Task sync tools and variables
+SemaphoreHandle_t xBumperReceived;
+SemaphoreHandle_t xActionDone;
 QueueHandle_t xQueueActions;
-QueueHandle_t xQueueMeasurements;
 //Constants
 const TickType_t xMaxExpectedBlockTime = pdMS_TO_TICKS(500);
 const uint8_t UART_FORMAT = TEXT;
 const uint8_t TIME_WINDOW_SECONDS = TIME_WINDOW_MILIS/1000;
+
+const float ROBOT_DIAMETER_MM = DISTANCIA_ENTRE_EJES_MM * MATH_PI;
+
+const float WHEEL_LENGTH_MM = MATH_PI * WHEEL_DIAMETER_MM;
+//Nos podemos saltar las multiplicaciones por pi ya que estarian en cada parte de la division
+const float REVS_TO_360 = DISTANCIA_ENTRE_EJES_MM/WHEEL_DIAMETER_MM;
 
 
 /*----------------------------------------------------------------------------*/
@@ -124,49 +135,86 @@ static void HeartBeatTask(void *pvParameters){
     }
 }
 
-static void CommandsTask(void *pvParameters) {
-    uint8_t pwm = PWM_START_VALUE;
+static void BuildAction(int action_index, action_message * action){
+    (*action).pwm =  PWM_VALUE;
+    char message[TX_UART_MESSAGE_LENGTH];
 
+    switch(action_index){
+    case 0:
+        //Avanzar 3 vueltas
+        (*action).l_revs = 3;
+        (*action).r_revs = 3;
+        break;
+    case 1:
+        //Girar 90º a la derecha
+        (*action).l_revs = REVS_TO_360/4;
+        (*action).r_revs = REVS_TO_360/-4;
+        break;
+    case 2:
+        //Avanzar 5 vueltas
+        (*action).l_revs = 5;
+        (*action).r_revs = 5;
+        break;
+    case 3:
+        //Girar 90º a la izquierda
+        (*action).l_revs = REVS_TO_360/-4;
+        (*action).r_revs = REVS_TO_360/4;
+        break;
+    case 4:
+        //Avanzar 3 vueltas
+        (*action).l_revs = 3;
+        (*action).r_revs = 3;
+        break;
+    default:
+        sprintf(message, "Unknown action %d. \n\r", action_index);
+        uart_print(message);
+        break;
+    }
+
+
+}
+
+static void CommandsTask(void *pvParameters) {
+    uint8_t action_index = 0;
     for (;;) {
 
 
-        queue_message commandToSendL;
-        commandToSendL.motor = MOTOR_LEFT;
-        commandToSendL.dir = MOTOR_DIR_FORWARD;
-        commandToSendL.pwm = pwm;
-        queue_message commandToSendR;
-        commandToSendR.motor = MOTOR_RIGHT;
-        commandToSendR.dir = MOTOR_DIR_FORWARD;
-        commandToSendR.pwm = pwm;
-        xQueueSend(xQueueActions, (void *)&commandToSendL, xMaxExpectedBlockTime);
-        xQueueSend(xQueueActions, (void *)&commandToSendR, xMaxExpectedBlockTime);
-        xQueueSend(xQueueMeasurements, (void *)&commandToSendR, xMaxExpectedBlockTime);
+        action_message action;
 
-        if(pwm == PWM_MAX_VALUE){
-            pwm = PWM_START_VALUE;
-        }else{
-            pwm+= PWM_INCREMENTAL_RATE;
-        }
+        BuildAction(action_index, &action);
 
+        xQueueSend(xQueueActions, (void *)&action, xMaxExpectedBlockTime);
 
         vTaskDelay(pdMS_TO_TICKS(TIME_WINDOW_MILIS));
-    }
 
+        action_index++;
+        if(action_index == 5){
+            vTaskSuspend( NULL );
+        }
+    }
 }
 
 
 static void MotorTask(void *pvParameters) {
-    queue_message commandToReceive;
+    BaseType_t r_motor_isrunning, l_motor_isrunning;
+    uint8_t motors_pwm_status;
 
-//    MotorStart(MOTOR_BOTH);
-//
-//    MotorConfigure(MOTOR_RIGHT, MOTOR_DIR_FORWARD, 0);
-//    MotorConfigure(MOTOR_LEFT, MOTOR_DIR_FORWARD, 0);
+    action_message commandToReceive;
+
+    xSemaphoreGiveFromISR(xActionDone, NULL);
+
 
     for (;;) {
+        GetMotorStatus(&l_motor_isrunning, &r_motor_isrunning, &motors_pwm_status);
+        if(l_motor_isrunning == pdFALSE && r_motor_isrunning == pdFALSE){
 
-        if (xQueueReceive(xQueueActions, (void *)&commandToReceive, xMaxExpectedBlockTime) == pdTRUE) {
-//            MotorConfigure(commandToReceive.motor, commandToReceive.dir, commandToReceive.pwm);
+//        if (xSemaphoreTake(xActionDone, xMaxExpectedBlockTime) == pdPASS){
+
+            if (xQueueReceive(xQueueActions, (void *)&commandToReceive, xMaxExpectedBlockTime) == pdTRUE) {
+                EncodedMotorRoll(commandToReceive.l_revs, commandToReceive.r_revs, commandToReceive.pwm);
+//            }else{
+//                xSemaphoreGive(xActionDone);
+            }
 
         }
     }
@@ -178,6 +226,8 @@ static void SpeedMeasure(void *pvParameters) {
     TickType_t previous_ticks, current_ticks, elapsed_ticks;
     uint32_t elapsed_ms;
     float left_distance_mm, left_speed_mm_s, right_distance_mm, right_speed_mm_s, left_median_speed, right_median_speed;
+    BaseType_t r_motor_isrunning, l_motor_isrunning;
+    uint8_t motors_pwm_status;
 
     // Wait for motors to start
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -206,7 +256,7 @@ static void SpeedMeasure(void *pvParameters) {
         EncodedMotorGetSpeed(ENCODER_RIGHT, elapsed_ms, &right_distance_mm, &right_speed_mm_s);
         right_median_speed = right_distance_mm / TIME_WINDOW_SECONDS;
 
-        formatAndPrintMessage(
+        FormatPrintSensorsData(
                 left_distance_mm,
                 left_speed_mm_s,
                 right_distance_mm,
@@ -215,12 +265,42 @@ static void SpeedMeasure(void *pvParameters) {
                 right_median_speed,
                 0);
 
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        GetMotorStatus(&l_motor_isrunning, &r_motor_isrunning, &motors_pwm_status);
+
+        FormatPrintMotorsData(l_motor_isrunning, r_motor_isrunning, motors_pwm_status);
+
+        vTaskDelay(pdMS_TO_TICKS(TIME_WINDOW_MILIS));
     }
 
 }
 
-static void formatAndPrintMessage(
+static void FormatPrintMotorsData(
+        BaseType_t r_motor_isrunning,
+        BaseType_t l_motor_isrunning,
+        uint8_t motors_pwm_status
+    ){
+    char message[TX_UART_MESSAGE_LENGTH];
+
+    switch(UART_FORMAT){
+    case TEXT:
+        sprintf(message, "R status: %d, L status: %d, Duty cycle: %d. \n\r", r_motor_isrunning, l_motor_isrunning, motors_pwm_status);
+        break;
+    case JSPUSH:
+        sprintf(message, "data.push({r: %d, l: %d, d: %d}); \n\r", r_motor_isrunning, l_motor_isrunning, motors_pwm_status);
+        break;
+    case JSON:
+        sprintf(message, "{r: %d, l: %d, d: %d} \n\r", r_motor_isrunning, l_motor_isrunning, motors_pwm_status);
+        break;
+    case CSV:
+        sprintf(message, "%d,%d,%d \n\r", r_motor_isrunning, l_motor_isrunning, motors_pwm_status);
+        break;
+    }
+
+    // send via UART
+    uart_print(message);
+}
+
+static void FormatPrintSensorsData(
         float left_distance_mm,
         float left_speed_mm_s,
         float right_distance_mm,
@@ -251,29 +331,43 @@ static void formatAndPrintMessage(
 }
 
 
-
 /*----------------------------------------------------------------------------*/
+
 
 int main(int argc, char** argv)
 {
     int32_t retVal = -1;
 
     // Initialize semaphores, queues,...
-    xQueueActions = xQueueCreate( QUEUE_SIZE, sizeof(queue_message) );
-    xQueueMeasurements = xQueueCreate( QUEUE_SIZE, sizeof(queue_message) );
+    xQueueActions = xQueueCreate( QUEUE_SIZE, sizeof(action_message) );
+    if(!xQueueActions){
+        led_on(MSP432_LAUNCHPAD_LED_RED);
+        while(1);
+    }
+    xBumperReceived = xSemaphoreCreateBinary();
+    if(!xBumperReceived){
+        led_on(MSP432_LAUNCHPAD_LED_RED);
+        while(1);
+    }
+    xActionDone = xSemaphoreCreateBinary();
+    if(!xActionDone){
+        led_on(MSP432_LAUNCHPAD_LED_RED);
+        while(1);
+    }
 
 
     /* Initialize the board and peripherals */
     board_init();
-    EncodedMotorInit();
+    EncodedMotorInit( NULL );
     uart_init(NULL);
     BumpInt_Init(NULL);
 
 
     if ( true ) {  //can be used to check the existence of FreeRTOS sync tools
         EncodedMotorStart(MOTOR_BOTH);
-        EncodedMotorRoll(10, -10, 50);
         /* Create HeartBeat task */
+
+//        EncodedMotorRoll(10, 10, 35);
         retVal = xTaskCreate(HeartBeatTask, "HeartBeatTask", HEARTBEAT_STACK_SIZE, NULL, HEARTBEAT_TASK_PRIORITY, NULL );
         if(retVal < 0) {
             led_on(MSP432_LAUNCHPAD_LED_RED);
@@ -281,14 +375,14 @@ int main(int argc, char** argv)
         }
 
         /* Create CommandsTask task */
-//        retVal = xTaskCreate(CommandsTask, "CommandsTask", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
+        retVal = xTaskCreate(CommandsTask, "CommandsTask", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
         if(retVal < 0) {
             led_on(MSP432_LAUNCHPAD_LED_RED);
             while(1);
         }
 
         /* Create Motor task */
-//        retVal = xTaskCreate(MotorTask, "MotorTask", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
+        retVal = xTaskCreate(MotorTask, "MotorTask", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
         if(retVal < 0) {
             led_on(MSP432_LAUNCHPAD_LED_RED);
             while(1);
