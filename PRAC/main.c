@@ -57,7 +57,7 @@
 /*----------------------------------------------------------------------------*/
 
 #define TASK_PRIORITY               ( tskIDLE_PRIORITY + 2 )
-#define MOTOR_TASK_PRIORITY         ( tskIDLE_PRIORITY + 5 )
+#define BUMP_TASK_PRIORITY          ( tskIDLE_PRIORITY + 3 )
 #define HEARTBEAT_TASK_PRIORITY     ( tskIDLE_PRIORITY + 1 )
 
 #define TASK_STACK_SIZE             ( 1024 )
@@ -77,7 +77,9 @@
 #define TX_UART_MESSAGE_LENGTH      ( 128 )
 
 
-#define TIME_WINDOW_MILIS            ( 1000 )
+#define TIME_WINDOW_MILIS            ( 2000 )
+
+#define MOTOR_BREAK_TIME             ( 500 )
 
 #define pdTICKS_TO_MS( xTimeInMs ) ( ( TickType_t ) ( ( ( TickType_t ) ( xTimeInMs ) * ( TickType_t ) 1000 ) / ( TickType_t ) configTICK_RATE_HZ ) )
 
@@ -89,6 +91,15 @@ typedef enum {
     CSV = 3
 } uart_format;
 
+typedef enum {
+    AV_3 = 0,
+    VR_90 = 1,
+    AV_5 = 2,
+    VL_90 = 3,
+    RE_1 = 4,
+    VR_180 = 5
+} command_enum;
+
 
 typedef struct{
     float r_revs;
@@ -98,10 +109,10 @@ typedef struct{
 
 
 // Tasks
-static void HeartBeatTask(void *pvParameters);
 static void CommandsTask(void *pvParameters);
 static void MotorTask(void *pvParameters);
-static void SpeedMeasure(void *pvParameters);
+static void SpeedMeasureTask(void *pvParameters);
+static void SensingTask(void *pvParameters);
 static void FormatPrintSensorsData(float left_distance_mm, float left_speed_mm_s, float right_distance_mm, float right_speed_mm_s, float left_median_speed, float right_median_speed, uint8_t pwm);
 static void FormatPrintMotorsData( BaseType_t r_motor_isrunning, BaseType_t l_motor_isrunning, uint8_t motors_pwm_status);
 // callbacks & functions
@@ -112,6 +123,7 @@ SemaphoreHandle_t xBumperReceived;
 SemaphoreHandle_t xActionDone;
 QueueHandle_t xQueueActions;
 //Constants
+const TickType_t bumperDEBOUNCE_DELAY = pdMS_TO_TICKS(DEBOUNCING_MS);
 const TickType_t xMaxExpectedBlockTime = pdMS_TO_TICKS(500);
 const uint8_t UART_FORMAT = TEXT;
 const uint8_t TIME_WINDOW_SECONDS = TIME_WINDOW_MILIS/1000;
@@ -122,64 +134,93 @@ const float WHEEL_LENGTH_MM = MATH_PI * WHEEL_DIAMETER_MM;
 //Nos podemos saltar las multiplicaciones por pi ya que estarian en cada parte de la division
 const float REVS_TO_360 = DISTANCIA_ENTRE_EJES_MM/WHEEL_DIAMETER_MM;
 
+const uint8_t N_REGULAR_ACTIONS = 4;
+const uint8_t N_BUMP_HIT_ACTIONS = 2;
+
 
 /*----------------------------------------------------------------------------*/
 
-
-static void HeartBeatTask(void *pvParameters){
-    for(;;){
-        led_toggle(MSP432_LAUNCHPAD_LED_RED);
-        vTaskDelay( pdMS_TO_TICKS(HEART_BEAT_ON_MS) );
-        led_toggle(MSP432_LAUNCHPAD_LED_RED);
-        vTaskDelay( pdMS_TO_TICKS(HEART_BEAT_OFF_MS) );
-    }
-}
-
-static void BuildAction(int action_index, action_message * action){
-    (*action).pwm =  PWM_VALUE;
+static void BuildCommand(command_enum command, action_message * action){
     char message[TX_UART_MESSAGE_LENGTH];
-
-    switch(action_index){
-    case 0:
+    switch(command){
+    case AV_3:
         //Avanzar 3 vueltas
         (*action).l_revs = 3;
         (*action).r_revs = 3;
         break;
-    case 1:
+    case VR_90:
         //Girar 90º a la derecha
         (*action).l_revs = REVS_TO_360/4;
         (*action).r_revs = REVS_TO_360/-4;
         break;
-    case 2:
+    case AV_5:
         //Avanzar 5 vueltas
         (*action).l_revs = 5;
         (*action).r_revs = 5;
         break;
-    case 3:
+    case VL_90:
         //Girar 90º a la izquierda
         (*action).l_revs = REVS_TO_360/-4;
         (*action).r_revs = REVS_TO_360/4;
         break;
+    case RE_1:
+        //Retroceder 1 vuelta
+        (*action).l_revs = -1;
+        (*action).r_revs = -1;
+        break;
+    case VR_180:
+        //Girar 180º a la izquierda
+        (*action).l_revs = REVS_TO_360/-2;
+        (*action).r_revs = REVS_TO_360/2;
+        break;
+    default:
+        sprintf(message, "Unknown command %d. \n\r", command);
+        uart_print(message);
+        break;
+    }
+
+}
+
+
+static void BuildAction(int8_t action_index, action_message * action){
+    (*action).pwm =  PWM_VALUE;
+    char message[TX_UART_MESSAGE_LENGTH];
+    command_enum command;
+    switch(action_index){
+    case 1:
+        command = AV_3;
+        break;
+    case 2:
+        command = VR_90;
+        break;
+    case 3:
+        command = AV_5;
+        break;
     case 4:
-        //Avanzar 3 vueltas
-        (*action).l_revs = 3;
-        (*action).r_revs = 3;
+        command = VL_90;
+        break;
+    case 5:
+        command = AV_3;
+        break;
+    case -1:
+        command = RE_1;
+        break;
+    case -2:
+        command = VR_180;
         break;
     default:
         sprintf(message, "Unknown action %d. \n\r", action_index);
         uart_print(message);
         break;
     }
-
+    BuildCommand(command, action);
 
 }
 
 static void CommandsTask(void *pvParameters) {
-    uint8_t action_index = 0;
+    uint8_t action_index = 1;
+    action_message action;
     for (;;) {
-
-
-        action_message action;
 
         BuildAction(action_index, &action);
 
@@ -188,7 +229,7 @@ static void CommandsTask(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(TIME_WINDOW_MILIS));
 
         action_index++;
-        if(action_index == 5){
+        if(action_index > N_REGULAR_ACTIONS){
             vTaskSuspend( NULL );
         }
     }
@@ -201,19 +242,22 @@ static void MotorTask(void *pvParameters) {
 
     action_message commandToReceive;
 
-    xSemaphoreGiveFromISR(xActionDone, NULL);
 
-
+    xSemaphoreGive(xActionDone);
     for (;;) {
         GetMotorStatus(&l_motor_isrunning, &r_motor_isrunning, &motors_pwm_status);
         if(l_motor_isrunning == pdFALSE && r_motor_isrunning == pdFALSE){
 
-//        if (xSemaphoreTake(xActionDone, xMaxExpectedBlockTime) == pdPASS){
+            if (xSemaphoreTake(xActionDone, xMaxExpectedBlockTime) == pdPASS){
 
-            if (xQueueReceive(xQueueActions, (void *)&commandToReceive, xMaxExpectedBlockTime) == pdTRUE) {
-                EncodedMotorRoll(commandToReceive.l_revs, commandToReceive.r_revs, commandToReceive.pwm);
-//            }else{
-//                xSemaphoreGive(xActionDone);
+                if (xQueueReceive(xQueueActions, (void *)&commandToReceive, xMaxExpectedBlockTime) == pdTRUE) {
+                    //Demos un respiro a los motores
+                    vTaskDelay(pdMS_TO_TICKS(MOTOR_BREAK_TIME));
+                    EncodedMotorRoll(commandToReceive.l_revs, commandToReceive.r_revs, commandToReceive.pwm);
+                }
+
+                xSemaphoreGive(xActionDone);
+
             }
 
         }
@@ -221,7 +265,29 @@ static void MotorTask(void *pvParameters) {
 
 }
 
-static void SpeedMeasure(void *pvParameters) {
+
+static void SensingTask(void *pvParameters) {
+    action_message action;
+    while(1){
+        if (xSemaphoreTake(xBumperReceived, xMaxExpectedBlockTime) == pdPASS){
+            vTaskDelay( bumperDEBOUNCE_DELAY );
+            //uint8_t status = BumpInt_Read();
+
+            EncodeedMotorCancelRoll();
+            if(xSemaphoreTake(xActionDone, xMaxExpectedBlockTime) == pdPASS){
+                for(int8_t i = (N_BUMP_HIT_ACTIONS * -1); i < 0; i++){
+
+                    BuildAction(i, &action);
+
+                    xQueueSendToFront(xQueueActions, (void *)&action, xMaxExpectedBlockTime);
+                }
+                xSemaphoreGive(xActionDone);
+            }
+        }
+    }
+}
+
+static void SpeedMeasureTask(void *pvParameters) {
 
     TickType_t previous_ticks, current_ticks, elapsed_ticks;
     uint32_t elapsed_ms;
@@ -332,7 +398,15 @@ static void FormatPrintSensorsData(
 
 
 /*----------------------------------------------------------------------------*/
-
+void BumperCallBack(uint8_t bumpers){
+    xSemaphoreGiveFromISR(xBumperReceived, NULL);
+}
+void MotorTaskEndCallback(){
+    xSemaphoreGiveFromISR(xActionDone, NULL);
+}
+void MotorTaskInterruptedCallback(){
+    xSemaphoreGive(xActionDone);
+}
 
 int main(int argc, char** argv)
 {
@@ -358,21 +432,13 @@ int main(int argc, char** argv)
 
     /* Initialize the board and peripherals */
     board_init();
-    EncodedMotorInit( NULL );
+    EncodedMotorInit( MotorTaskEndCallback, MotorTaskInterruptedCallback );
     uart_init(NULL);
-    BumpInt_Init(NULL);
+    BumpInt_Init(BumperCallBack);
 
 
     if ( true ) {  //can be used to check the existence of FreeRTOS sync tools
         EncodedMotorStart(MOTOR_BOTH);
-        /* Create HeartBeat task */
-
-//        EncodedMotorRoll(10, 10, 35);
-        retVal = xTaskCreate(HeartBeatTask, "HeartBeatTask", HEARTBEAT_STACK_SIZE, NULL, HEARTBEAT_TASK_PRIORITY, NULL );
-        if(retVal < 0) {
-            led_on(MSP432_LAUNCHPAD_LED_RED);
-            while(1);
-        }
 
         /* Create CommandsTask task */
         retVal = xTaskCreate(CommandsTask, "CommandsTask", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
@@ -388,8 +454,15 @@ int main(int argc, char** argv)
             while(1);
         }
 
+        /* Create Sensing task */
+        retVal = xTaskCreate(SensingTask, "SensingTask", TASK_STACK_SIZE, NULL, BUMP_TASK_PRIORITY, NULL );
+        if(retVal < 0) {
+            led_on(MSP432_LAUNCHPAD_LED_RED);
+            while(1);
+        }
+
         /* Create SpeedMeasure task */
-        retVal = xTaskCreate(SpeedMeasure, "SpeedMeasure", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
+        retVal = xTaskCreate(SpeedMeasureTask, "SpeedMeasure", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
         if(retVal < 0) {
             led_on(MSP432_LAUNCHPAD_LED_RED);
             while(1);

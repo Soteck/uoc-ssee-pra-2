@@ -18,6 +18,7 @@
 
 /* Free-RTOS includes */
 #include "FreeRTOS.h"
+#include "semphr.h"
 #include "portmacro.h"
 
 
@@ -37,13 +38,15 @@ static uint8_t right_rev_order = 0;
 static BaseType_t checkDecimal = pdFALSE;
 
 static void (*end_roll_callback)(void);
+static void (*roll_interrupt_callback)(void);
 static BaseType_t end_roll_callback_set = pdFALSE;
+static BaseType_t roll_interrupt_callback_set = pdFALSE;
 
 static BaseType_t r_motor_running = pdFALSE;
 static BaseType_t l_motor_running = pdFALSE;
 static uint8_t motors_pwm = 0;
 
-
+SemaphoreHandle_t xMutexOrders;
 
 void GetMotorStatus(BaseType_t * point_l_motor, BaseType_t * point_r_motor, uint8_t * point_pwm){
     *point_l_motor = l_motor_running;
@@ -60,6 +63,7 @@ static void TestCallback(){
 static void StopLeft(){
     MotorStop(MOTOR_LEFT);
     l_motor_running = pdFALSE;
+    TestCallback();
 }
 static void StartLeft(){
     MotorStart(MOTOR_LEFT);
@@ -73,7 +77,6 @@ static void StopRight(){
 static void StartRight(){
     MotorStart(MOTOR_RIGHT);
     r_motor_running = pdTRUE;
-    TestCallback();
 }
 
 // No necesitamos implementar secciones criticas porque al estar dentro de un ISR no puede interumpirse
@@ -101,8 +104,26 @@ static void RightDecimalRevCallBack() {
 }
 
 
+void EncodeedMotorCancelRoll(){
+    if( xSemaphoreTake( xMutexOrders, ( TickType_t ) 10 ) == pdTRUE ){
+        left_rev_order = 0;
+        right_rev_order = 0;
+        xSemaphoreGive( xMutexOrders );
+    }
+    StopLeft();
+    StopRight();
+
+    left_rev_count = 0;
+    right_rev_count = 0;
+
+    if(roll_interrupt_callback_set == pdTRUE){
+        roll_interrupt_callback();
+    }
+}
+
 
 void EncodedMotorRoll(float left_revolutions, float right_revolutions, uint8_t motor_pwm){
+    EncodeedMotorCancelRoll();
     motors_pwm = motor_pwm;
     motor_dir_e left_direction = MOTOR_DIR_FORWARD;
     motor_dir_e right_direction = MOTOR_DIR_FORWARD;
@@ -115,8 +136,13 @@ void EncodedMotorRoll(float left_revolutions, float right_revolutions, uint8_t m
         right_revolutions = right_revolutions * -1;
     }
 
-    left_rev_order = (uint8_t) left_revolutions;
-    right_rev_order = (uint8_t) right_revolutions;
+    if( xSemaphoreTake( xMutexOrders, ( TickType_t ) 10 ) == pdTRUE ){
+        left_rev_order = (uint8_t) left_revolutions;
+        right_rev_order = (uint8_t) right_revolutions;
+        xSemaphoreGive( xMutexOrders );
+    }
+
+
     float l_decimal = left_revolutions - left_rev_order;
     float r_decimal = right_revolutions - right_rev_order;
 
@@ -125,6 +151,9 @@ void EncodedMotorRoll(float left_revolutions, float right_revolutions, uint8_t m
     if(l_decimal > 0 || r_decimal > 0){
         checkDecimal = pdTRUE;
         INIT_DECIMAL_REV_CALLBACK(l_decimal, r_decimal, LeftDecimalRevCallBack, RightDecimalRevCallBack);
+    }else{
+        REMOVE_DECIMAL_REV_CALLBACK();
+        checkDecimal = pdFALSE;
     }
 
     if(left_revolutions != 0){
@@ -137,13 +166,6 @@ void EncodedMotorRoll(float left_revolutions, float right_revolutions, uint8_t m
     }
 }
 
-void EncodeedMotorCancelRoll(){
-    left_rev_order = 0;
-    right_rev_order = 0;
-    StopLeft();
-    StopRight();
-}
-
 
 
 /*----------------------------------------------------------------------------*/
@@ -153,12 +175,17 @@ void EncodeedMotorCancelRoll(){
 
 /*----------------------------------------------------------------------------*/
 
-void EncodedMotorInit( void (*end_callback_fn)(void)){
+void EncodedMotorInit( void (*end_callback_fn)(void),  void (*interrupted_callback_fn)(void)){
     MotorInit();
     EncoderInit();
+    xMutexOrders = xSemaphoreCreateMutex();
     if(end_callback_fn){
         end_roll_callback_set = pdTRUE;
         end_roll_callback = end_callback_fn;
+    }
+    if(interrupted_callback_fn){
+        roll_interrupt_callback_set = pdTRUE;
+        roll_interrupt_callback = interrupted_callback_fn;
     }
 }
 void EncodedMotorStart(motor_e motor){

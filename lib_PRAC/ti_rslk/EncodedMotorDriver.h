@@ -7,7 +7,7 @@
 
 void EncodedMotorRoll(float left_revolutions, float right_revolutions, uint8_t motor_pwm);
 void EncodeedMotorCancelRoll();
-void EncodedMotorInit( void (*end_callback_fn)(void));
+void EncodedMotorInit( void (*end_callback_fn)(void),  void (*interrupted_callback_fn)(void));
 void EncodedMotorStart(motor_e motor);
 
 

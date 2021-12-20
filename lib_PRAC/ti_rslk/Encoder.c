@@ -114,6 +114,7 @@ void EncoderInit(void) {
     GPIO_enableInterrupt(ENCODER_RIGHT_B_GPIO_PORT, ENCODER_RIGHT_B_GPIO_PIN);
 
     // Enable GPIO interrupts
+    Interrupt_setPriority(INT_PORT5, 0xFF);
     Interrupt_enableInterrupt(INT_PORT5);
 }
 
@@ -191,6 +192,10 @@ void INIT_DECIMAL_REV_CALLBACK(
     decimal_callbacks_attached = pdTRUE;
     left_decimal_rotation_callback_fn = left_callback_fn;
     right_decimal_rotation_callback_fn = right_callback_fn;
+}
+
+void REMOVE_DECIMAL_REV_CALLBACK(){
+    decimal_callbacks_attached = pdFALSE;
 }
 
 

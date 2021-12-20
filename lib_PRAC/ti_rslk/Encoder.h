@@ -58,5 +58,6 @@ void EncoderGetSpeed(encoder_e encoder, uint32_t elapsed_ms, float * distance_mm
 void AddCallBackForRotationCount(uint16_t rotationsNumber, void (*callback)(uint8_t));
 void INIT_REV_CALLLBACK( void (*left_callback_fn)(void), void (*right_callback_fn)(void));
 void INIT_DECIMAL_REV_CALLBACK( float l_rpm_fraction, float r_rpm_fraction, void (*left_callback_fn)(void), void (*right_callback_fn)(void));
+void REMOVE_DECIMAL_REV_CALLBACK();
 
 /*----------------------------------------------------------------------------*/
