@@ -70,7 +70,8 @@
 
 #define PWM_VALUE                   ( 25 )
 
-#define DEBOUNCING_MS               ( 200 )
+//Pongo un valor relativamente alto por si el robot choca con cualquier cosa, tenga un segundo de debounce
+#define DEBOUNCING_MS               ( 1000 )
 
 
 
@@ -169,9 +170,9 @@ static void BuildCommand(command_enum command, action_message * action){
         (*action).r_revs = -1;
         break;
     case VR_180:
-        //Girar 180º a la izquierda
-        (*action).l_revs = REVS_TO_360/-2;
-        (*action).r_revs = REVS_TO_360/2;
+        //Girar 180º a la derecha
+        (*action).l_revs = REVS_TO_360/2;
+        (*action).r_revs = REVS_TO_360/-2;
         break;
     default:
         sprintf(message, "Unknown command %d. \n\r", command);
@@ -270,7 +271,6 @@ static void SensingTask(void *pvParameters) {
     action_message action;
     while(1){
         if (xSemaphoreTake(xBumperReceived, xMaxExpectedBlockTime) == pdPASS){
-            vTaskDelay( bumperDEBOUNCE_DELAY );
             //uint8_t status = BumpInt_Read();
 
             EncodeedMotorCancelRoll();
@@ -283,6 +283,8 @@ static void SensingTask(void *pvParameters) {
                 }
                 xSemaphoreGive(xActionDone);
             }
+            vTaskDelay( bumperDEBOUNCE_DELAY );
+            xSemaphoreTake(xBumperReceived, 0);
         }
     }
 }
@@ -338,7 +340,7 @@ int main(int argc, char** argv)
             led_on(MSP432_LAUNCHPAD_LED_RED);
             while(1);
         }
-
+//        EncodedMotorRoll(20, 20, 25);
         /* Create Motor task */
         retVal = xTaskCreate(MotorTask, "MotorTask", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL );
         if(retVal < 0) {

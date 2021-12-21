@@ -43,8 +43,8 @@
 #define COUNTS_PER_REVOLUTION_INV       ( -360.0f ) // Setting that as constant will prevent a lot of cpu cycles
 
 /*----------------------------------------------------------------------------*/
-#define WHEEL_DIAMETER_MM           ( 60.0f )
-#define DISTANCIA_ENTRE_EJES_MM     ( 150 )
+#define WHEEL_DIAMETER_MM           ( 70.0f )
+#define DISTANCIA_ENTRE_EJES_MM     ( 135 )
 #define MATH_PI                     ( 3.14159f )
 
 typedef enum {

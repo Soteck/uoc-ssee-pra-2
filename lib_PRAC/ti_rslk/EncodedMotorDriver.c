@@ -91,6 +91,7 @@ static void SendQueue(int32_t r_ticks, int32_t l_ticks){
 // No necesitamos implementar secciones criticas porque al estar dentro de un ISR no puede interumpirse
 static void LeftCallBack(int32_t ticks) {
     StopLeft();
+    SendQueue(NULL, ticks);
 }
 static void RightCallBack(int32_t ticks) {
     StopRight();
@@ -100,9 +101,9 @@ static void RightCallBack(int32_t ticks) {
 
 void EncodeedMotorCancelRoll(){
 
+    REMOVE_CALLBACKS();
     StopLeft();
     StopRight();
-
     if(roll_interrupt_callback_set == pdTRUE){
         roll_interrupt_callback();
     }
@@ -128,11 +129,11 @@ void EncodedMotorRoll(float left_revolutions, float right_revolutions, uint8_t m
 
 
     if(left_revolutions != 0){
-        MotorConfigure(MOTOR_LEFT, left_direction, motor_pwm);
+        MotorConfigure(MOTOR_LEFT, left_direction, motor_pwm*1.1);
         StartLeft();
     }
-    if(left_revolutions != 0){
-        MotorConfigure(MOTOR_RIGHT, right_direction, motor_pwm);
+    if(right_revolutions != 0){
+        MotorConfigure(MOTOR_RIGHT, right_direction, (motor_pwm));
         StartRight();
     }
 }
